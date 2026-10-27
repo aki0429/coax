@@ -2,6 +2,10 @@ version: 2
 
 project_name: coax
 
+# Assemble the release privately; publish after assets and release notes are checked.
+release:
+  draft: true
+
 before:
   hooks:
     - go test ./...
@@ -65,7 +69,7 @@ builds:
     flags:
       - "-trimpath"
     ldflags:
-      - -s -w
+      - -s -w -X github.com/Till0196/coax/pkg/cli.version={{.Version}} -X github.com/Till0196/coax/pkg/cli.commit={{.FullCommit}}
   - id: coax-darwin
     main: ./cmd/coax
     binary: coax
@@ -79,7 +83,7 @@ builds:
     flags:
       - "-trimpath"
     ldflags:
-      - -s -w
+      - -s -w -X github.com/Till0196/coax/pkg/cli.version={{.Version}} -X github.com/Till0196/coax/pkg/cli.commit={{.FullCommit}}
   - id: coax-windows
     main: ./cmd/coax
     binary: coax
@@ -93,7 +97,7 @@ builds:
     flags:
       - "-trimpath"
     ldflags:
-      - -s -w
+      - -s -w -X github.com/Till0196/coax/pkg/cli.version={{.Version}} -X github.com/Till0196/coax/pkg/cli.commit={{.FullCommit}}
   - id: fwextract-linux
     main: ./cmd/fwextract
     binary: fwextract
@@ -152,6 +156,10 @@ archives:
       - LICENSE-APACHE
       - NOTICE
       - README.md
+      - docs/boards/cech-zd1j.md
+      - docs/boards/cech-zd1j-stability.md
+      - docs/boards/cech-zd1j-reconnect.md
+      - patches/BonDriver_coax-reconnect.patch
   # The WinUSB INFs and the scripts that install them travel with the Windows build.
   - id: windows
     ids: [coaxd-windows, coax-windows, fwextract-windows]
@@ -163,6 +171,10 @@ archives:
       - NOTICE
       - README.md
       - driver/windows/*
+      - docs/boards/cech-zd1j.md
+      - docs/boards/cech-zd1j-stability.md
+      - docs/boards/cech-zd1j-reconnect.md
+      - patches/BonDriver_coax-reconnect.patch
 
 nfpms:
   - file_name_template: '{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}{{ if .Arm }}v{{ .Arm }}{{ end }}'
@@ -170,8 +182,8 @@ nfpms:
       - coaxd-linux
       - coax-linux
       - fwextract-linux
-    maintainer: Till0196
-    description: Tuner daemon and client that tune and stream over HTTP
+    maintainer: aki0429
+    description: Tuner daemon and client with Sony CECH-ZD1 J acquisition stability fixes
     license: "Apache-2.0 OR GPL-2.0-or-later"
     formats:
       - deb
@@ -192,10 +204,14 @@ nfpms:
         dst: /usr/share/doc/coax/LICENSE-APACHE
         file_info:
           mode: 0644
+      - src: ./docs/boards/cech-zd1j-stability.md
+        dst: /usr/share/doc/coax/cech-zd1j-stability.md
+        file_info:
+          mode: 0644
 
 dockers_v2:
   - images:
-      - ghcr.io/till0196/coax
+      - ghcr.io/aki0429/coax
     tags:
       - "{{ .Version }}"
       - latest
@@ -209,7 +225,7 @@ dockers_v2:
       - linux/386
       - linux/arm/v7
     labels:
-      org.opencontainers.image.source: https://github.com/Till0196/coax
+      org.opencontainers.image.source: https://github.com/aki0429/coax
       org.opencontainers.image.version: "{{ .Version }}"
       org.opencontainers.image.revision: "{{ .FullCommit }}"
       org.opencontainers.image.licenses: Apache-2.0 OR GPL-2.0-or-later

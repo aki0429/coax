@@ -1,0 +1,276 @@
+diff --git a/Cargo.lock b/Cargo.lock
+index b60760a..936d377 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -30,6 +30,7 @@ checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
+ [[package]]
+ name = "coax"
+ version = "0.1.0"
++source = "git+https://github.com/Till0196/coax-rs#5d3dad3ce60a6223b665e9dac8beed88ebdc7e9e"
+ 
+ [[package]]
+ name = "coax_exports"
+@@ -74,6 +75,7 @@ dependencies = [
+ [[package]]
+ name = "isdb"
+ version = "0.1.0"
++source = "git+https://github.com/Till0196/coax-rs#5d3dad3ce60a6223b665e9dac8beed88ebdc7e9e"
+ dependencies = [
+  "encoding_rs",
+  "miniz_oxide",
+@@ -83,9 +85,9 @@ dependencies = [
+ 
+ [[package]]
+ name = "miniz_oxide"
+-version = "0.8.9"
++version = "0.9.1"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "1fa76a2c86f704bdb222d66965fb3d63269ce38518b83cb0575fca855ebb6316"
++checksum = "b63fbc4a50860e98e7b2aa7804ded1db5cbc3aff9193adaff57a6931bf7c4b4c"
+ dependencies = [
+  "adler2",
+ ]
+@@ -93,6 +95,7 @@ dependencies = [
+ [[package]]
+ name = "mmttlv"
+ version = "0.1.0"
++source = "git+https://github.com/Till0196/coax-rs#5d3dad3ce60a6223b665e9dac8beed88ebdc7e9e"
+ dependencies = [
+  "mpegts",
+ ]
+@@ -100,3 +103,4 @@ dependencies = [
+ [[package]]
+ name = "mpegts"
+ version = "0.1.0"
++source = "git+https://github.com/Till0196/coax-rs#5d3dad3ce60a6223b665e9dac8beed88ebdc7e9e"
+diff --git a/bondriver/src/driver.rs b/bondriver/src/driver.rs
+index 93d05ec..9f52da0 100644
+--- a/bondriver/src/driver.rs
++++ b/bondriver/src/driver.rs
+@@ -11,7 +11,7 @@
+ 
+ use std::sync::{Mutex, MutexGuard, PoisonError};
+ use std::thread;
+-use std::time::Duration;
++use std::time::{Duration, Instant};
+ 
+ use coax::daemon::{self, Daemon};
+ use coax::launch::Launcher;
+@@ -47,6 +47,8 @@ pub struct Driver {
+     /// The channel being received, if any. Dropping it is what gives the tuner
+     /// back to the daemon.
+     stream: Option<Stream>,
++    /// Avoid a tight reconnect loop while a device or its service is absent.
++    reconnect_after: Instant,
+     /// The piece last handed to the host. Held because the interface's pointer
+     /// form promises the bytes stay put until the next call.
+     handed_out: Vec<u8>,
+@@ -226,6 +228,7 @@ impl Driver {
+             daemon,
+             launcher,
+             stream: None,
++            reconnect_after: Instant::now(),
+             handed_out: Vec::new(),
+             listed: Listed::default(),
+             declared,
+@@ -250,6 +253,7 @@ impl Driver {
+             }
+             Err(reason) => {
+                 trace!("daemon unreachable: {reason}");
++                self.open = false;
+                 false
+             }
+         }
+@@ -343,12 +347,23 @@ impl Driver {
+         // second tuner.
+         self.let_go_of_the_stream();
+ 
++        // OpenTuner may have been called minutes ago. A failed tune leaves no
++        // client connected, so the daemon is allowed to idle out in between.
++        // Recheck it here and refresh port-based tuner IDs after a restart or
++        // USB replug instead of keeping a stale listing forever.
++        if self.launcher.is_some() && !self.open_tuner() {
++            self.tuned = None;
++            return false;
++        }
++        self.listed = Listed::default();
++
+         let mut refusal = String::from("no tuner to ask");
+         for way in &ways {
+             match self.tune(space, way) {
+                 Ok(stream) => {
+                     self.stream = Some(stream);
+                     self.tuned = Some((space, channel));
++                    self.reconnect_after = Instant::now() + Duration::from_secs(2);
+                     return true;
+                 }
+                 Err(why) => {
+@@ -506,6 +521,7 @@ impl Driver {
+     /// hands back a pointer has no buffer to fill, so it gives as much as has
+     /// piled up.
+     pub fn take_stream(&mut self) -> Option<&[u8]> {
++        self.recover_stream();
+         let taken = self.stream.as_ref()?.take_upto(MOST_AT_ONCE)?;
+         self.handed_out = taken;
+         Some(&self.handed_out)
+@@ -514,6 +530,7 @@ impl Driver {
+     /// The same, for the form of the call that copies into a buffer of the
+     /// host's own: never more than the host said it had room for.
+     pub fn take_stream_upto(&mut self, limit: usize) -> Option<&[u8]> {
++        self.recover_stream();
+         let taken = self.stream.as_ref()?.take_upto(limit.min(MOST_AT_ONCE))?;
+         self.handed_out = taken;
+         Some(&self.handed_out)
+@@ -524,6 +541,31 @@ impl Driver {
+             stream.purge();
+         }
+     }
++
++    /// A stream is unbounded, so an empty, ended stream is an unexpected loss.
++    /// Drain buffered packets first, then restore the last successful channel.
++    /// CloseTuner clears `tuned`, which also cancels recovery explicitly.
++    fn recover_stream(&mut self) {
++        let Some((space, channel)) = self.tuned else {
++            return;
++        };
++        if self.launcher.is_none() || Instant::now() < self.reconnect_after {
++            return;
++        }
++        let lost = self
++            .stream
++            .as_ref()
++            .is_none_or(|stream| stream.ended() && stream.ready() == 0);
++        if !lost {
++            return;
++        }
++        trace!("stream lost; restoring channel {space}/{channel}");
++        if !self.set_channel(space, channel) {
++            // Preserve the last successful selection for the next bounded try.
++            self.tuned = Some((space, channel));
++        }
++        self.reconnect_after = Instant::now() + Duration::from_secs(2);
++    }
+ }
+ 
+ /// Waits on a stream, or for the whole wait when there is none: a host told
+@@ -563,7 +605,11 @@ impl Locked {
+     /// a host waiting on the stream on one thread must not hold up the signal
+     /// meter or a change of channel on another for the length of the wait.
+     pub fn wait_ts_stream(&self, timeout_ms: u32) -> u32 {
+-        let waiter = self.lock().waiter();
++        let waiter = {
++            let mut driver = self.lock();
++            driver.recover_stream();
++            driver.waiter()
++        };
+         wait_on(waiter, timeout_ms)
+     }
+ }
+@@ -571,10 +617,12 @@ impl Locked {
+ #[cfg(test)]
+ mod tests {
+     use super::signal_is_missing;
++    use coax::launch::Launcher;
+     use std::io::{Read, Write};
+     use std::net::TcpListener;
+     use std::thread;
+     use std::time::Duration;
++    use std::time::Instant;
+ 
+     use coax::daemon::{Board, Controls, Daemon, Endpoint, GainControl, Held, LnbControl, Tuner};
+     use coax_settings::channels::{Channel, Lineup, Route, Space};
+@@ -722,6 +770,94 @@ mod tests {
+         assert!(!driver.is_open());
+     }
+ 
++    #[test]
++    fn an_ended_local_stream_is_reacquired_without_reopening_the_driver() {
++        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
++        let address = listener.local_addr().unwrap().to_string();
++        listener.set_nonblocking(true).unwrap();
++        let served = thread::spawn(move || {
++            let deadline = Instant::now() + Duration::from_secs(5);
++            let mut versions = 0;
++            let mut streams = 0;
++            while streams < 2 && Instant::now() < deadline {
++                let Ok((mut socket, _)) = listener.accept() else {
++                    thread::sleep(Duration::from_millis(5));
++                    continue;
++                };
++                socket
++                    .set_read_timeout(Some(Duration::from_secs(1)))
++                    .unwrap();
++                let mut request = Vec::new();
++                let mut byte = [0u8; 1];
++                while !request.ends_with(b"\r\n\r\n") {
++                    if socket.read(&mut byte).unwrap_or(0) == 0 {
++                        break;
++                    }
++                    request.push(byte[0]);
++                }
++                if request.starts_with(b"GET /version ") {
++                    versions += 1;
++                    socket
++                        .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\ntest")
++                        .unwrap();
++                } else if request.starts_with(b"GET /stream?") {
++                    streams += 1;
++                    let mut packet = [0u8; 188];
++                    packet[0] = 0x47;
++                    packet[4] = streams;
++                    socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: video/mp2t\r\nTransfer-Encoding: chunked\r\n\r\nbc\r\n").unwrap();
++                    socket.write_all(&packet).unwrap();
++                    socket.write_all(b"\r\n0\r\n\r\n").unwrap();
++                }
++            }
++            (versions, streams)
++        });
++        let mut driver = Driver::new(
++            lineup(),
++            "coax",
++            Daemon::new(Endpoint::Network(address)),
++            Some(Launcher::default()),
++            Vec::new(),
++            TunerSettings::default(),
++        );
++        assert!(driver.set_channel(0, 0));
++        assert_eq!(driver.wait_ts_stream(1000), 0);
++        assert_eq!(driver.take_stream().unwrap()[4], 1);
++        driver.reconnect_after = Instant::now();
++        let deadline = Instant::now() + Duration::from_secs(3);
++        let mut restored = false;
++        while Instant::now() < deadline {
++            if let Some(packet) = driver.take_stream() {
++                restored = packet[4] == 2;
++                if restored {
++                    break;
++                }
++            }
++            thread::sleep(Duration::from_millis(5));
++        }
++        assert!(restored, "the driver did not restore the ended stream");
++        let (versions, streams) = served.join().unwrap();
++        assert_eq!(streams, 2);
++        assert_eq!(versions, 2, "each acquisition must recheck daemon liveness");
++    }
++
++    #[test]
++    fn closing_the_tuner_cancels_automatic_recovery() {
++        let mut driver = Driver::new(
++            lineup(),
++            "coax",
++            nowhere(),
++            Some(Launcher::default()),
++            Vec::new(),
++            TunerSettings::default(),
++        );
++        driver.tuned = Some((0, 0));
++        driver.close_tuner();
++        assert!(driver.take_stream().is_none());
++        assert_eq!(driver.current_channel(), NOT_TUNED);
++        assert!(!driver.is_open());
++    }
++
+     /// The whole path, against a daemon that is only a socket: the request goes
+     /// out, the chunked answer comes back, and the host takes it a piece at a
+     /// time.

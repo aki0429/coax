@@ -5,6 +5,8 @@
 > Windowsの実機1台で、大阪・京都の主要局のフルセグと、13〜18ch・22〜26chの通常ワンセグを確認しています。
 > 22ch（NHK神戸）・26ch（サンテレビ）は検証環境ではワンセグのみ確認できました。
 > 修正内容・検証方法・制限は **[torne受信安定化の記録](docs/boards/cech-zd1j-stability.md)** を参照してください。
+> ビルド済みの配布物は **[Releases](https://github.com/aki0429/coax/releases)** にあります。
+> TVTestでサービス停止後に復帰できない場合の **[BonDriver再接続修正](docs/boards/cech-zd1j-reconnect.md)** も用意しています。
 
 coaxは、チューナーを制御してストリームを取得するソフトウェアです。
 USB（WinUSB、IOKit、usbfs）、Linux DVB API、Windows BDAといったOSごとの違いを内側で吸収し、どのプラットフォームでも同じ方法で選局とストリーミングができます。
