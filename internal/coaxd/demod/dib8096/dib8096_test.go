@@ -243,6 +243,70 @@ func lockedChip() *fakeChip {
 	return chip
 }
 
+// settlingChip models a usable signal whose guard search fails if started
+// before the FFT result has settled. Fast USB transfers must not shorten
+// the hardware settling interval, as observed on Osaka/Kyoto channels.
+type settlingChip struct {
+	*fakeChip
+	now          func() time.Time
+	fftDone      time.Time
+	guardTooSoon bool
+}
+
+func (chip *settlingChip) Write(address byte, data []byte) error {
+	if err := chip.fakeChip.Write(address, data); err != nil {
+		return err
+	}
+	if address == Address && len(data) == 4 && uint16(data[0])<<8|uint16(data[1]) == 357 && uint16(data[2])<<8|uint16(data[3]) == 0xf {
+		chip.guardTooSoon = chip.now().Sub(chip.fftDone) < 100*time.Millisecond
+		if chip.guardTooSoon {
+			chip.queues[1284] = []uint16{0, 1}
+			chip.registers[568] = 0
+		}
+	}
+	return nil
+}
+
+func (chip *settlingChip) WriteRead(address byte, write []byte, length int) ([]byte, error) {
+	data, err := chip.fakeChip.WriteRead(address, write, length)
+	if err == nil && address == Address && len(write) == 2 && uint16(write[0])<<8|uint16(write[1]) == 1284 && len(data) == 2 && data[1]&1 != 0 && chip.fftDone.IsZero() {
+		chip.fftDone = chip.now()
+	}
+	return data, err
+}
+
+func TestTuneAllowsFFTToSettleBeforeGuardSearch(t *testing.T) {
+	clock := &fakeClock{now: time.Unix(1000, 0)}
+	chip := &settlingChip{fakeChip: lockedChip(), now: clock.Now}
+	demod := New(chip)
+	demod.setTiming(clock.Now, clock.Sleep, 5*time.Second)
+	if err := demod.Initialize(); err != nil {
+		t.Fatal(err)
+	}
+	if err := demod.Tune(539142857); err != nil {
+		t.Fatal(err)
+	}
+	if chip.fftDone.IsZero() || chip.guardTooSoon || demod.demod.status != statusDataLocked {
+		t.Fatalf("acquisition failed: FFT observed=%v, premature guard=%v, status=%d", !chip.fftDone.IsZero(), chip.guardTooSoon, demod.demod.status)
+	}
+}
+
+func TestTuneRetriesFailedAcquisition(t *testing.T) {
+	chip := lockedChip()
+	// First FFT succeeds but guard search fails; a fresh second search locks.
+	chip.queues[1284] = []uint16{1, 0, 1, 1, 0, 2}
+	demod, _ := newTestDemod(chip)
+	if err := demod.Initialize(); err != nil {
+		t.Fatal(err)
+	}
+	if err := demod.Tune(545142857); err != nil {
+		t.Fatal(err)
+	}
+	if demod.demod.status != statusDataLocked {
+		t.Fatalf("retry did not acquire the usable signal: status=%d", demod.demod.status)
+	}
+}
+
 func TestTune(t *testing.T) {
 	chip := lockedChip()
 	demod, clock := newTestDemod(chip)

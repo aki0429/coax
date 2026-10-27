@@ -396,12 +396,25 @@ func (board *Demod) Tune(frequencyHz uint32) (err error) {
 		board.asleep = false
 	}
 
-	// A DVBv5 tune from a frequency alone starts from a cleared cache.
-	board.channel.clear()
-	board.channel.frequency = frequencyHz
-
-	if err := board.demod.setFrontend(); err != nil {
-		return err
+	// A usable signal can occasionally miss the FFT/guard acquisition after
+	// a channel change. Retry a failed acquisition with a fresh property cache;
+	// reusing the first attempt's parameters would skip the search that failed.
+	// Bus errors and the bounded state-machine timeout remain real errors.
+	for attempt := 0; attempt < 3; attempt++ {
+		if attempt != 0 {
+			board.demod.sleep(100 * time.Millisecond)
+		}
+		board.channel.clear()
+		board.channel.frequency = frequencyHz
+		if err := board.demod.setFrontend(); err != nil {
+			return err
+		}
+		if board.failure.err != nil {
+			return board.failure.err
+		}
+		if board.demod.status != statusTuneFailed && board.demod.readStatus()&feHasLock != 0 {
+			break
+		}
 	}
 	return board.failure.err
 }

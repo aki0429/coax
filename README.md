@@ -1,5 +1,11 @@
 # coax
 
+> **Sony torne（CECH-ZD1 J）の受信安定化フォークです。**
+> [Till0196/coax](https://github.com/Till0196/coax) を元に、DiB8096の選局待機時間と受信失敗時の再探索を修正しました。
+> Windowsの実機1台で、大阪・京都の主要局のフルセグと、13〜18ch・22〜26chの通常ワンセグを確認しています。
+> 22ch（NHK神戸）・26ch（サンテレビ）は検証環境ではワンセグのみ確認できました。
+> 修正内容・検証方法・制限は **[torne受信安定化の記録](docs/boards/cech-zd1j-stability.md)** を参照してください。
+
 coaxは、チューナーを制御してストリームを取得するソフトウェアです。
 USB（WinUSB、IOKit、usbfs）、Linux DVB API、Windows BDAといったOSごとの違いを内側で吸収し、どのプラットフォームでも同じ方法で選局とストリーミングができます。
 

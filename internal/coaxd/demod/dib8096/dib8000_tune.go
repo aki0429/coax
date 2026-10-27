@@ -708,8 +708,8 @@ func (state *dib8000) setSyncWait() {
 // 100ms steps until the callback time, so every step waited at least that
 // long, and some steps need more than the callback time they ask for:
 // started 1ms after the FFT search ends, the guard search can report a
-// failure. 10ms held on every try, on the CECH-ZD1 J under Linux and Windows.
-const minTuneStep = 10 * time.Millisecond
+// failure. 10ms fails on some Osaka channels; preserve the Linux 100ms floor.
+const minTuneStep = 100 * time.Millisecond
 
 // getTimeout is dib8000_get_timeout: delay is in 100us units, or in symbols
 // when symbolDependent.
