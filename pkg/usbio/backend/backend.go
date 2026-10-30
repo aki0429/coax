@@ -54,7 +54,9 @@ func (id ID) In(list []ID) bool {
 // the node needs write permission the caller may not have.
 type Found struct {
 	ID ID
-	// Location is the "bus:address" name a selector matches against.
+	// Location is the "bus:address" name a selector matches against. Windows
+	// includes the full dotted port route for hubs, or an interface path when
+	// the topology is unavailable.
 	Location string
 	// Serial is the device's serial-number string, when the operating system knew
 	// it without the device being opened.

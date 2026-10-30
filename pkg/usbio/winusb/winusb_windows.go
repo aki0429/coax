@@ -112,7 +112,6 @@ const (
 	digcfPresent         = 0x02
 	digcfDeviceInterface = 0x10
 	spdrpService         = 0x04
-	spdrpAddress         = 0x1c
 	spdrpLocationPaths   = 0x23
 	invalidHandle        = ^uintptr(0)
 
@@ -168,35 +167,12 @@ func Enumerate() ([]backend.Found, error) {
 			continue
 		}
 		location := registryString(devices, info, spdrpLocationPaths)
-		port := portPath(location, hosts)
-		bus, address := 0, registryWord(devices, info, spdrpAddress)
-		if port != "" {
-			fmt.Sscanf(port, "%d-", &bus)
-		}
-		devicePath := path
-		listed = append(listed, backend.Found{
-			ID:       backend.ID{Vendor: vendor, Product: product},
-			Location: fmt.Sprintf("%03d:%03d", bus, address),
-			Serial:   serialIn(path),
-			Port:     port,
-			Held:     heldBy(registryString(devices, info, spdrpService)),
-			Open:     func() (backend.Device, error) { return openWinUSB(devicePath) },
-		})
+		found := describeDevice(path, location, hosts, registryString(devices, info, spdrpService))
+		found.ID = backend.ID{Vendor: vendor, Product: product}
+		found.Open = func() (backend.Device, error) { return openWinUSB(path) }
+		listed = append(listed, found)
 	}
 	return listed, nil
-}
-
-// heldBy names the driver a device is bound to when it is not WinUSB. The
-// listing above takes in every device whatever its driver, and one bound to a
-// vendor's BDA driver would otherwise be offered here as well as by the bda
-// backend, and opening it would send WinUSB's requests to that driver. A device
-// with no driver at all is not held: nothing else has it, and the open fails
-// with the advice to bind it.
-func heldBy(service string) string {
-	if service == "" || strings.EqualFold(service, "WinUSB") {
-		return ""
-	}
-	return service
 }
 
 // interfaceDetail reads one interface's device path and its device node.
@@ -249,17 +225,6 @@ func registryString(devices uintptr, info *spDevInfoData, property uint32) strin
 	return syscall.UTF16ToString(buffer)
 }
 
-func registryWord(devices uintptr, info *spDevInfoData, property uint32) int {
-	var value uint32
-	var kind, size uint32
-	if ret, _, _ := procDeviceRegistry.Call(devices, uintptr(unsafe.Pointer(info)), uintptr(property),
-		uintptr(unsafe.Pointer(&kind)), uintptr(unsafe.Pointer(&value)),
-		unsafe.Sizeof(value), uintptr(unsafe.Pointer(&size))); ret == 0 {
-		return 0
-	}
-	return int(value)
-}
-
 // hostControllers lists where every USB host controller sits. Windows has no bus
 // numbering to borrow, so one is made by sorting the controllers on physical
 // location and numbering from one; that does not depend on Windows' enumeration
@@ -288,48 +253,6 @@ func hostControllers() []string {
 	}
 	sort.Strings(paths)
 	return paths
-}
-
-// portPath turns a device's location into the "bus-port.port" shape this package
-// names devices with, which is the shape Linux uses too.
-func portPath(location string, hosts []string) string {
-	at := strings.Index(location, "#USBROOT(")
-	if at < 0 {
-		return ""
-	}
-	bus := 0
-	for index, host := range hosts {
-		if strings.HasPrefix(location, host+"#") {
-			bus = index + 1
-			break
-		}
-	}
-	if bus == 0 {
-		return ""
-	}
-	var ports []string
-	for _, part := range strings.Split(location[at:], "#") {
-		if strings.HasPrefix(part, "USB(") && strings.HasSuffix(part, ")") {
-			ports = append(ports, part[4:len(part)-1])
-		}
-	}
-	if len(ports) == 0 {
-		return ""
-	}
-	return fmt.Sprintf("%d-%s", bus, strings.Join(ports, "."))
-}
-
-// serialIn pulls the serial number out of a device interface path. Windows
-// names a device instance after the serial its descriptor carries -- the "0" in
-// \\?\usb#vid_0511&pid_0045#0#{a5dcbf10-...} -- so it is known without opening
-// the device. A device with no serial gets an instance name Windows made up
-// from where it is plugged in, and those always have an ampersand in them.
-func serialIn(path string) string {
-	parts := strings.Split(path, "#")
-	if len(parts) < 4 || parts[2] == "" || strings.Contains(parts[2], "&") {
-		return ""
-	}
-	return parts[2]
 }
 
 // identifiersIn pulls the vendor and product out of a device interface path,
