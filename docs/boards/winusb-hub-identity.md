@@ -19,6 +19,16 @@ Windowsの`SPDRP_ADDRESS`はUSBハブ内のポート番号であり、同じホ�
 
 これらは合成した機器情報と模擬レジストリーによる回帰テストです。Windows実機でのUSBハブ列挙、実際の選局・映像受信、長時間安定性は未確認です。
 
+関連するWindowsテストは、次で再実行できます。
+
+```text
+go test ./pkg/usbio/winusb ./internal/coaxd/host/pool ./internal/coaxd/demod/dib8096
+```
+
+2026-10-31の確認では、上記は成功し、新しい機器識別・割当のテストは10回の反復でも成功しました。一方、範囲を広げた`go test ./pkg/usbio/...`では、今回変更していない`pkg/usbio/injected`のWindows一時ファイル削除テスト5件が共有違反で失敗しました。この修正で解消する問題とは分けて記録しています。
+
+GitHub ActionsのCIにも手動実行の入口を追加し、実機を使わないLinux側の全体テストと各OS向けの検査を実行できるようにしています。
+
 ## 更新時の注意
 
 実際に使用している`coaxd.exe`を、TVTestと受信サービスを終了してから更新してください。これはWindowsのcoax側の機器識別の修正です。WinUSBの再導入やBonDriverの再ビルドを必須にする変更ではありません。
