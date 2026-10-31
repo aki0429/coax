@@ -61,3 +61,26 @@ func TestSimilarPortNumbersHaveDistinctSelectors(t *testing.T) {
 		seen[found.Location] = true
 	}
 }
+
+func TestIdenticalRoutesOnDifferentControllersStayDistinct(t *testing.T) {
+	hosts := []string{"PCIROOT(0)#PCI(1400)", "PCIROOT(0)#PCI(1500)"}
+	first := describeDevice("interface-a", hosts[0]+"#USBROOT(0)#USB(1)#USB(10)", hosts, "WinUSB")
+	second := describeDevice("interface-b", hosts[1]+"#USBROOT(0)#USB(1)#USB(10)", hosts, "WinUSB")
+	if first.Location != "001:001.010" || second.Location != "002:001.010" {
+		t.Fatalf("controllers lost: %q and %q", first.Location, second.Location)
+	}
+}
+
+func TestMissingTopologyFallsBackToEachInterfacePath(t *testing.T) {
+	const host = "PCIROOT(0)#PCI(1400)"
+	for _, location := range []string{"", "unavailable", host + "#USBROOT(0)", "PCIROOT(0)#PCI(1500)#USBROOT(0)#USB(1)"} {
+		t.Run(location, func(t *testing.T) {
+			for _, path := range []string{"interface-a", "interface-b"} {
+				found := describeDevice(path, location, []string{host}, "WinUSB")
+				if found.Location != path {
+					t.Fatalf("selector = %q, want interface path %q", found.Location, path)
+				}
+			}
+		})
+	}
+}

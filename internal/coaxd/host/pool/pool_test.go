@@ -779,3 +779,45 @@ func TestSixUSBDevicesOnHubsLeaseIndependently(t *testing.T) {
 		lease.Release()
 	}
 }
+
+func TestSixUSBDevicesOnHubsCanStayLeasedTogether(t *testing.T) {
+	registry := &fakeRegistry{boards: make(map[string]*fakeBoard)}
+	for hub := 1; hub <= 3; hub++ {
+		for port := 1; port <= 2; port++ {
+			selector := fmt.Sprintf("001:%03d.%03d", hub, port)
+			board := &fakeBoard{tuners: []device.TunerInfo{{Index: 0, Deliveries: []string{"ISDB-T"}}}}
+			registry.boards[selector] = board
+			registry.detected = append(registry.detected, Detected{
+				Backend: "test-usb", Selector: selector, Location: selector,
+				Port: fmt.Sprintf("1-%d.%d", hub, port), Tuners: board.tuners,
+				Deliveries: []string{"ISDB-T"},
+			})
+		}
+	}
+	pool := New(registry, Options{})
+	defer pool.Close()
+	// Keep all leases alive: each request must reach a different board.
+	var releases []func()
+	for _, target := range registry.detected {
+		lease, err := pool.Lease(Want{TunerID: "test-usb:p" + target.Port + ":0", Owner: pool.NewOwner()})
+		if err != nil {
+			t.Fatalf("lease %s while others are held: %v", target.Selector, err)
+		}
+		releases = append(releases, lease.Release)
+		t.Cleanup(lease.Release)
+	}
+	if got := registry.openCount(); got != 6 {
+		t.Fatalf("opened %d boards, want 6 independent boards", got)
+	}
+	releases[0]()
+	boards, err := pool.Boards()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, board := range boards {
+		want := board.Location != registry.detected[0].Location
+		if got := board.Tuners[0].Leased; got != want {
+			t.Errorf("after releasing one device: %s leased = %v, want %v", board.Location, got, want)
+		}
+	}
+}
