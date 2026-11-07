@@ -1,4 +1,4 @@
-//go:build windows && amd64
+//go:build ignore
 
 // Windows amd64 ABI smoke test with a real Winsock AF_UNIX connection.
 package main
