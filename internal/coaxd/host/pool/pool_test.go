@@ -821,3 +821,64 @@ func TestSixUSBDevicesOnHubsCanStayLeasedTogether(t *testing.T) {
 		}
 	}
 }
+
+// TestTwoSonyClientsAutomaticallyUseDifferentDevices models two independent
+// TVTest instances. Neither client pins a physical device; the second must use
+// the free board while the first keeps its stream lease.
+func TestTwoSonyClientsAutomaticallyUseDifferentDevices(t *testing.T) {
+	registry := &fakeRegistry{boards: make(map[string]*fakeBoard)}
+	for hub := 1; hub <= 2; hub++ {
+		selector := fmt.Sprintf("001:%03d.001", hub)
+		board := &fakeBoard{tuners: []device.TunerInfo{{Index: 0, Name: "DiB8096", Deliveries: []string{"ISDB-T"}}}}
+		registry.boards[selector] = board
+		registry.detected = append(registry.detected, Detected{
+			Backend: "cech-zd1j", Selector: selector, Location: selector,
+			Port: fmt.Sprintf("1-%d.1", hub), Tuners: board.tuners, Deliveries: []string{"ISDB-T"},
+		})
+	}
+	supervisor := New(registry, Options{})
+	defer supervisor.Close()
+	first, err := supervisor.Lease(Want{DeliverySystem: "ISDB-T", Owner: supervisor.NewOwner()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Release()
+	second, err := supervisor.Lease(Want{DeliverySystem: "ISDB-T", Owner: supervisor.NewOwner()})
+	if err != nil {
+		t.Fatalf("second TVTest could not use the free Sony tuner: %v", err)
+	}
+	defer second.Release()
+	if first.ID() == second.ID() {
+		t.Fatalf("both clients received %s", first.ID())
+	}
+	if registry.openCount() != 2 {
+		t.Fatalf("opened %d physical boards, want 2", registry.openCount())
+	}
+	if _, err = supervisor.Lease(Want{DeliverySystem: "ISDB-T", Owner: supervisor.NewOwner()}); !errors.Is(err, ErrBusy) {
+		t.Fatalf("third client: got %v, want busy with both devices leased", err)
+	}
+	first.Release()
+	boards, err := supervisor.Boards()
+	if err != nil {
+		t.Fatal(err)
+	}
+	leased := 0
+	for _, board := range boards {
+		for _, tuner := range board.Tuners {
+			if tuner.Leased {
+				leased++
+			}
+		}
+	}
+	if leased != 1 {
+		t.Fatalf("closing one TVTest left %d leased tuners, want 1", leased)
+	}
+	replacement, err := supervisor.Lease(Want{DeliverySystem: "ISDB-T", Owner: supervisor.NewOwner()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer replacement.Release()
+	if replacement.ID() != first.ID() {
+		t.Fatalf("new client received %s, want released %s", replacement.ID(), first.ID())
+	}
+}
