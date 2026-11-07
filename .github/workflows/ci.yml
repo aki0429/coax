@@ -5,7 +5,10 @@ permissions:
   contents: read
 jobs:
   reproduce:
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
@@ -22,6 +25,7 @@ jobs:
           GOOS: windows
           GOARCH: amd64
         run: |
+          git config core.autocrlf
           go version
           go mod verify
           mkdir -p verification
