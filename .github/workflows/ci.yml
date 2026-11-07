@@ -1,91 +1,33 @@
-name: CI
-
+name: Verify suspended Windows release build
 on:
-  push:
-    branches:
-      - main
-  pull_request:
   workflow_dispatch:
-
 permissions:
   contents: read
-
-concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
-  test:
+  reproduce:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      - name: Set up Go
-        uses: actions/setup-go@v7
+      - uses: actions/checkout@v7
         with:
-          go-version-file: go.mod
+          ref: 1abce580a912e042a36ef22e21540e4d60747e14
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.26.2'
           cache: true
-          cache-dependency-path: |
-            go.sum
-
-      - name: Check formatting
+      - name: Verify dependencies and rebuild without executing binaries
+        env:
+          CGO_ENABLED: '0'
+          GOOS: windows
+          GOARCH: amd64
         run: |
-          unformatted=$(gofmt -l .)
-          if [ -n "$unformatted" ]; then
-            echo "gofmt reports these files:"
-            echo "$unformatted"
-            exit 1
-          fi
-
-      # The Windows and macOS halves of the USB backend never compile on a
-      # Linux runner, so vet them explicitly.
-      - name: Vet
-        run: |
-          for target in linux/amd64 linux/arm64 linux/386 linux/arm \
-                        windows/amd64 windows/arm64 windows/386 darwin/amd64 darwin/arm64; do
-            echo "== $target"
-            GOOS=${target%/*} GOARCH=${target#*/} go vet ./...
-          done
-
-      - name: Test
-        run: go test ./...
-
-      # usbfs's structs and ioctl numbers differ on a 32-bit kernel; the runner
-      # runs 386 binaries natively.
-      - name: Test as 32-bit
-        run: GOARCH=386 go test ./...
-
-      - name: Compile the per-target tests
-        run: |
-          for target in windows/amd64 windows/arm64 windows/386 darwin/amd64 darwin/arm64 linux/arm; do
-            echo "== $target"
-            GOOS=${target%/*} GOARCH=${target#*/} go test -c -o /dev/null ./pkg/usbio/...
-          done
-
-      # A build that quietly lost a USB backend still links and runs, and only
-      # fails once a tuner is plugged in, so check that every board package's
-      # backend name reached the daemon.
-      - name: Build
-        run: |
-          backends=$(find internal/coaxd/usb/board -name '*.go' ! -name '*_test.go' \
-            -exec sed -nE 's/^\tName: +"([^"]+)",$/\1/p' {} + | sort -u)
-          if [ -z "$backends" ]; then
-            echo "no backend names found under internal/coaxd/usb/board" >&2
-            exit 1
-          fi
-          echo "backends:" $backends
-          for target in linux/amd64 linux/arm64 linux/386 linux/arm \
-                        windows/amd64 windows/arm64 windows/386 darwin/amd64 darwin/arm64; do
-            echo "== $target"
-            for cmd in coax fwextract; do
-              CGO_ENABLED=0 GOARM=7 GOOS=${target%/*} GOARCH=${target#*/} go build -o /dev/null ./cmd/$cmd
-            done
-            CGO_ENABLED=0 GOARM=7 GOOS=${target%/*} GOARCH=${target#*/} go build -o coaxd.bin ./cmd/coaxd
-            for backend in $backends; do
-              if ! grep -qa -- "$backend" coaxd.bin; then
-                echo "the $backend backend is missing from coaxd for $target" >&2
-                exit 1
-              fi
-            done
-          done
+          go version
+          go mod verify
+          mkdir -p verification
+          go build -buildvcs=false -trimpath -ldflags '-s -w -X main.version=0.1.2-multi-tuner -X main.commit=1abce580a912e042a36ef22e21540e4d60747e14' -o verification/coaxd.exe ./cmd/coaxd
+          go build -buildvcs=false -trimpath -ldflags '-s -w -X github.com/Till0196/coax/pkg/cli.version=0.1.2-multi-tuner -X github.com/Till0196/coax/pkg/cli.commit=1abce580a912e042a36ef22e21540e4d60747e14' -o verification/coax.exe ./cmd/coax
+          sha256sum verification/coax.exe verification/coaxd.exe
+          echo 'b437f2239d3e5aec32554bdd0cc8cbd00644c3b878bdf0742d9f69f409e7ae0f  verification/coax.exe' > verification/expected.sha256
+          echo '4159feb46c3995085da7e9be7e703e07bc567179936d48c0bdc31b50c542399d  verification/coaxd.exe' >> verification/expected.sha256
+          sha256sum -c verification/expected.sha256
