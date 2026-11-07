@@ -1,0 +1,33 @@
+name: Verify suspended Windows release build
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  reproduce:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: 1abce580a912e042a36ef22e21540e4d60747e14
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.26.2'
+          cache: true
+      - name: Verify dependencies and rebuild without executing binaries
+        env:
+          CGO_ENABLED: '0'
+          GOOS: windows
+          GOARCH: amd64
+        run: |
+          go version
+          go mod verify
+          mkdir -p verification
+          go build -buildvcs=false -trimpath -ldflags '-s -w -X main.version=0.1.2-multi-tuner -X main.commit=1abce580a912e042a36ef22e21540e4d60747e14' -o verification/coaxd.exe ./cmd/coaxd
+          go build -buildvcs=false -trimpath -ldflags '-s -w -X github.com/Till0196/coax/pkg/cli.version=0.1.2-multi-tuner -X github.com/Till0196/coax/pkg/cli.commit=1abce580a912e042a36ef22e21540e4d60747e14' -o verification/coax.exe ./cmd/coax
+          sha256sum verification/coax.exe verification/coaxd.exe
+          echo 'b437f2239d3e5aec32554bdd0cc8cbd00644c3b878bdf0742d9f69f409e7ae0f  verification/coax.exe' > verification/expected.sha256
+          echo '4159feb46c3995085da7e9be7e703e07bc567179936d48c0bdc31b50c542399d  verification/coaxd.exe' >> verification/expected.sha256
+          sha256sum -c verification/expected.sha256
